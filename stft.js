@@ -4,6 +4,7 @@ const stftStatusEl = document.getElementById("stftStatus");
 const recordingItemsEl = document.getElementById("recordingItems");
 const stftWindowInputEl = document.getElementById("stftWindowInput");
 const stftHopInputEl = document.getElementById("stftHopInput");
+const stftMinFrequencyInputEl = document.getElementById("stftMinFrequencyInput");
 const stftMaxFrequencyInputEl = document.getElementById("stftMaxFrequencyInput");
 const refreshButtonEl = document.getElementById("refreshButton");
 const downloadImageButtonEl = document.getElementById("downloadImageButton");
@@ -11,9 +12,17 @@ const downloadWavButtonEl = document.getElementById("downloadWavButton");
 const stftFreqHighEl = document.getElementById("stftFreqHigh");
 const stftFreqMidEl = document.getElementById("stftFreqMid");
 const stftFreqLowEl = document.getElementById("stftFreqLow");
+const dbStartInputEl = document.getElementById("dbStartInput");
+const dbEndInputEl = document.getElementById("dbEndInput");
+const dbStartValueEl = document.getElementById("dbStartValue");
+const dbEndValueEl = document.getElementById("dbEndValue");
+const legendDbStartEl = document.getElementById("legendDbStart");
+const legendDbEndEl = document.getElementById("legendDbEnd");
 
-const minDb = -95;
-const maxDb = -15;
+let dbStart = -95;
+let dbEnd = -15;
+const dbScaleStart = -140;
+const dbScaleEnd = 0;
 const DB_NAME = "piezoVisualizerRecordings";
 const DB_VERSION = 1;
 const RECORDING_STORE = "recordings";
@@ -22,13 +31,15 @@ let recordings = [];
 let selectedRecordingId = null;
 let selectedRecording = null;
 let stftPayload = null;
+let memoSaveTimers = new Map();
+let stftReloadTimer = null;
 
 function clamp(value, low, high) {
   return Math.min(high, Math.max(low, value));
 }
 
-function colorForDb(db) {
-  const t = clamp((db - minDb) / (maxDb - minDb), 0, 1);
+function scaleColorForDb(db) {
+  const t = clamp((db - dbScaleStart) / (dbScaleEnd - dbScaleStart), 0, 1);
 
   if (t < 0.35) {
     const p = t / 0.35;
@@ -56,6 +67,32 @@ function colorForDb(db) {
   ];
 }
 
+function colorForDb(db) {
+  if (db < dbStart || db > dbEnd) {
+    return null;
+  }
+  return scaleColorForDb(db);
+}
+
+function syncDbRangeControls() {
+  const start = Math.min(Number(dbStartInputEl.value), Number(dbEndInputEl.value) - 1);
+  const end = Math.max(Number(dbEndInputEl.value), start + 1);
+  dbStart = clamp(start, -140, -1);
+  dbEnd = clamp(end, dbStart + 1, 0);
+
+  dbStartInputEl.value = String(dbStart);
+  dbEndInputEl.value = String(dbEnd);
+  dbStartValueEl.textContent = `${dbStart} dB`;
+  dbEndValueEl.textContent = `${dbEnd} dB`;
+  legendDbStartEl.textContent = `${dbScaleStart} dB`;
+  legendDbEndEl.textContent = `${dbScaleEnd} dB`;
+}
+
+function updateDbRange() {
+  syncDbRangeControls();
+  drawStft();
+}
+
 function setStatus(message) {
   stftStatusEl.textContent = message;
 }
@@ -67,6 +104,14 @@ function numericInput(input, fallback) {
 
 function formatDuration(seconds) {
   return `${Number(seconds || 0).toFixed(2)}s`;
+}
+
+function selectedFrequencyRange() {
+  const minFrequency = Math.max(0, numericInput(stftMinFrequencyInputEl, 0));
+  const maxFrequency = Math.max(minFrequency + 1, numericInput(stftMaxFrequencyInputEl, 10000));
+  stftMinFrequencyInputEl.value = String(minFrequency);
+  stftMaxFrequencyInputEl.value = String(maxFrequency);
+  return { minFrequency, maxFrequency };
 }
 
 function openRecordingDb() {
@@ -95,6 +140,17 @@ async function getAllRecordings() {
   return result.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 
+async function putRecording(recording) {
+  const db = await openRecordingDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction(RECORDING_STORE, "readwrite");
+    transaction.objectStore(RECORDING_STORE).put(recording);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  db.close();
+}
+
 function setExportEnabled(hasStft) {
   downloadImageButtonEl.disabled = !hasStft;
   downloadWavButtonEl.disabled = !selectedRecording;
@@ -113,12 +169,15 @@ function renderRecordingList() {
   }
 
   for (const recording of recordings) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "recordingItem";
+    const item = document.createElement("article");
+    item.className = "recordingItem";
     if (recording.id === selectedRecordingId) {
-      button.classList.add("active");
+      item.classList.add("active");
     }
+
+    const selectButton = document.createElement("button");
+    selectButton.type = "button";
+    selectButton.className = "recordingSelect";
 
     const title = document.createElement("span");
     title.className = "recordingTitle";
@@ -132,10 +191,62 @@ function renderRecordingList() {
     device.className = "recordingDevice";
     device.textContent = recording.deviceLabel;
 
-    button.append(title, meta, device);
-    button.addEventListener("click", () => selectRecording(recording.id));
-    recordingItemsEl.appendChild(button);
+    const memoLabel = document.createElement("label");
+    memoLabel.className = "memoEditor";
+
+    const memoTitle = document.createElement("span");
+    memoTitle.textContent = "メモ";
+
+    const memoInput = document.createElement("textarea");
+    memoInput.value = recording.memo || "";
+    memoInput.rows = 3;
+    memoInput.placeholder = "タスク名、条件、メモ";
+    memoInput.addEventListener("input", () => scheduleMemoSave(recording.id, memoInput.value));
+
+    selectButton.append(title, meta, device);
+    selectButton.addEventListener("click", () => selectRecording(recording.id));
+    memoLabel.append(memoTitle, memoInput);
+    item.append(selectButton, memoLabel);
+    recordingItemsEl.appendChild(item);
   }
+}
+
+function updateLocalMemo(recordingId, memo) {
+  recordings = recordings.map((recording) =>
+    recording.id === recordingId ? { ...recording, memo } : recording
+  );
+  if (selectedRecording?.id === recordingId) {
+    selectedRecording.memo = memo;
+  }
+  if (stftPayload?.recording?.id === recordingId) {
+    stftPayload.recording.memo = memo;
+  }
+}
+
+async function saveMemo(recordingId, memo) {
+  const recording = recordings.find((item) => item.id === recordingId);
+  if (!recording) {
+    return;
+  }
+  const updated = { ...recording, memo: memo.slice(0, 2000) };
+  await putRecording(updated);
+  updateLocalMemo(recordingId, updated.memo);
+  setStatus("メモを保存しました");
+}
+
+function scheduleMemoSave(recordingId, memo) {
+  updateLocalMemo(recordingId, memo);
+  clearTimeout(memoSaveTimers.get(recordingId));
+  memoSaveTimers.set(
+    recordingId,
+    setTimeout(async () => {
+      try {
+        await saveMemo(recordingId, memo);
+      } catch (error) {
+        setStatus(`メモ保存エラー: ${error.message}`);
+      }
+    }, 500)
+  );
 }
 
 async function loadRecordings() {
@@ -219,7 +330,7 @@ function channelFrame(pcm, start, channel, channels, window) {
 function computeStft(recording) {
   const windowSize = Number(stftWindowInputEl.value);
   const hopSize = Math.max(32, Math.round(numericInput(stftHopInputEl, 512)));
-  const maxFrequency = Math.max(1, numericInput(stftMaxFrequencyInputEl, 10000));
+  const { minFrequency, maxFrequency } = selectedFrequencyRange();
   const pcm = new Float32Array(recording.pcm);
 
   if (recording.frames < windowSize) {
@@ -230,10 +341,12 @@ function computeStft(recording) {
   const high = Math.min(maxFrequency, nyquist);
   const binCount = windowSize / 2 + 1;
   const frequencies = [];
+  const frequencyBins = [];
   for (let bin = 0; bin < binCount; bin += 1) {
     const frequency = (bin * recording.sampleRate) / windowSize;
-    if (frequency <= high) {
+    if (frequency >= minFrequency && frequency <= high) {
       frequencies.push(frequency);
+      frequencyBins.push(bin);
     }
   }
 
@@ -258,10 +371,11 @@ function computeStft(recording) {
       const frame = channelFrame(pcm, start, channel, recording.channels, window);
       const spectrum = fftReal(frame);
       const magnitudes = new Array(frequencies.length);
-      for (let bin = 0; bin < frequencies.length; bin += 1) {
+      for (let index = 0; index < frequencyBins.length; index += 1) {
+        const bin = frequencyBins[index];
         const magnitude =
           Math.hypot(spectrum.real[bin], spectrum.imag[bin]) / (windowSize / 2);
-        magnitudes[bin] = 20 * Math.log10(Math.max(magnitude, 1.0e-10));
+        magnitudes[index] = 20 * Math.log10(Math.max(magnitude, 1.0e-10));
       }
       channelColumns.push(magnitudes);
     }
@@ -280,6 +394,7 @@ function computeStft(recording) {
 }
 
 async function loadSelectedStft() {
+  clearTimeout(stftReloadTimer);
   if (!selectedRecording) {
     stftPayload = null;
     setExportEnabled(false);
@@ -330,7 +445,10 @@ function updateAxis() {
 
 function drawChannel(columns, channelIndex, yStart, channelHeight) {
   const width = stftCanvas.width;
-  const bins = stftPayload.frequencies.length;
+  const frequencies = stftPayload.frequencies || [];
+  const lowFrequency = frequencies[0] || 0;
+  const highFrequency = frequencies[frequencies.length - 1] || 1;
+  const frequencySpan = Math.max(1, highFrequency - lowFrequency);
   const columnWidth = Math.max(1, width / Math.max(1, columns.length));
 
   for (let x = 0; x < columns.length; x += 1) {
@@ -338,10 +456,19 @@ function drawChannel(columns, channelIndex, yStart, channelHeight) {
     const drawX = Math.floor(x * columnWidth);
     const drawW = Math.ceil(columnWidth);
 
-    for (let bin = 0; bin < bins; bin += 1) {
-      const y = yStart + channelHeight - Math.ceil(((bin + 1) / bins) * channelHeight);
-      const nextY = yStart + channelHeight - Math.ceil((bin / bins) * channelHeight);
-      const [r, g, b] = colorForDb(magnitudes[bin] ?? minDb);
+    for (let bin = 0; bin < frequencies.length; bin += 1) {
+      const current = clamp(frequencies[bin], lowFrequency, highFrequency);
+      const previous = clamp(frequencies[Math.max(0, bin - 1)] ?? lowFrequency, lowFrequency, highFrequency);
+      const next = clamp(frequencies[Math.min(frequencies.length - 1, bin + 1)] ?? highFrequency, lowFrequency, highFrequency);
+      const low = bin === 0 ? lowFrequency : (previous + current) / 2;
+      const high = bin === frequencies.length - 1 ? highFrequency : (current + next) / 2;
+      const y = yStart + channelHeight - Math.ceil(((high - lowFrequency) / frequencySpan) * channelHeight);
+      const nextY = yStart + channelHeight - Math.ceil(((low - lowFrequency) / frequencySpan) * channelHeight);
+      const color = colorForDb(magnitudes[bin] ?? dbScaleStart);
+      if (color === null) {
+        continue;
+      }
+      const [r, g, b] = color;
       stftCtx.fillStyle = `rgb(${r},${g},${b})`;
       stftCtx.fillRect(drawX, y, drawW, Math.max(1, nextY - y));
     }
@@ -478,11 +605,15 @@ window.addEventListener("resize", () => {
 refreshButtonEl.addEventListener("click", refresh);
 downloadImageButtonEl.addEventListener("click", downloadStftImage);
 downloadWavButtonEl.addEventListener("click", downloadSelectedWav);
+dbStartInputEl.addEventListener("input", updateDbRange);
+dbEndInputEl.addEventListener("input", updateDbRange);
 stftWindowInputEl.addEventListener("change", loadSelectedStft);
 stftHopInputEl.addEventListener("change", loadSelectedStft);
+stftMinFrequencyInputEl.addEventListener("change", loadSelectedStft);
 stftMaxFrequencyInputEl.addEventListener("change", loadSelectedStft);
 
 resizeCanvas();
+syncDbRangeControls();
 drawStft();
 setExportEnabled(false);
 refresh();

@@ -646,6 +646,7 @@ async function stopRecording() {
       frames,
       durationSeconds: frames / config.sampleRate,
       deviceLabel: selectedDeviceLabel(),
+      memo: "",
       pcm: pcm.buffer,
     };
     await saveRecording(recording);

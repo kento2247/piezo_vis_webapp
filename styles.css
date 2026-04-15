@@ -205,7 +205,7 @@ canvas {
 
 .legend {
   display: grid;
-  grid-template-columns: auto minmax(120px, 280px) auto;
+  grid-template-columns: auto minmax(120px, 280px) auto minmax(260px, 460px);
   align-items: center;
   gap: 10px;
   color: #bac3be;
@@ -257,7 +257,10 @@ canvas {
   display: grid;
   gap: 4px;
   width: 100%;
+  border: 1px solid #2f3b40;
+  border-radius: 8px;
   border-color: #2f3b40;
+  padding: 8px 11px;
   background: #1b2023;
   color: #f1f3ee;
   text-align: left;
@@ -267,19 +270,53 @@ canvas {
   border-color: #f0d44e;
 }
 
+.recordingSelect {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
 .recordingTitle {
   font-weight: 700;
 }
 
 .recordingMeta,
 .recordingDevice,
-.emptyState {
+.emptyState,
+.memoEditor {
   color: #bac3be;
   font-size: 12px;
 }
 
 .recordingDevice {
   overflow-wrap: anywhere;
+}
+
+.memoEditor {
+  display: grid;
+  gap: 4px;
+}
+
+.memoEditor textarea {
+  width: 100%;
+  min-height: 58px;
+  resize: vertical;
+  border: 1px solid #435059;
+  border-radius: 8px;
+  padding: 7px 8px;
+  background: #111719;
+  color: #f1f3ee;
+  font: inherit;
+}
+
+.memoEditor textarea:focus {
+  outline: 2px solid #f0d44e;
+  outline-offset: 1px;
 }
 
 .plotStack {
@@ -291,8 +328,59 @@ canvas {
 }
 
 .stftSettings {
-  grid-template-columns: repeat(3, minmax(86px, 112px)) auto;
+  grid-template-columns: repeat(4, minmax(86px, 112px)) auto;
   align-items: end;
+}
+
+.dbRangeControls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 220px));
+  gap: 10px;
+  color: #bac3be;
+  font-size: 12px;
+}
+
+.dbRangeControls label {
+  display: grid;
+  gap: 5px;
+}
+
+.dbRangeControls span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dbRangeControls output {
+  color: #f1f3ee;
+  font-variant-numeric: tabular-nums;
+}
+
+.dbRangeControls input[type="range"] {
+  appearance: none;
+  width: 100%;
+  height: 12px;
+  border: 1px solid #435059;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #071014, #116764, #f0d44e, #f45b44);
+  accent-color: #f0d44e;
+}
+
+.dbRangeControls input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #f1f3ee;
+  border-radius: 8px;
+  background: #111315;
+}
+
+.dbRangeControls input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #f1f3ee;
+  border-radius: 8px;
+  background: #111315;
 }
 
 @media (max-width: 720px) {
@@ -328,6 +416,18 @@ canvas {
 
   .stftSettings {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dbRangeControls {
+    grid-template-columns: 1fr;
+  }
+
+  .legend {
+    grid-template-columns: auto minmax(120px, 1fr) auto;
+  }
+
+  .legend .dbRangeControls {
+    grid-column: 1 / -1;
   }
 
   .historyApp {

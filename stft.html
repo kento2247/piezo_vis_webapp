@@ -43,6 +43,10 @@
               <input id="stftHopInput" type="number" min="32" max="32768" step="32" value="512" />
             </label>
             <label>
+              <span>min Hz</span>
+              <input id="stftMinFrequencyInput" type="number" min="0" max="96000" step="100" value="0" />
+            </label>
+            <label>
               <span>max Hz</span>
               <input id="stftMaxFrequencyInput" type="number" min="1" max="96000" step="100" value="10000" />
             </label>
@@ -68,9 +72,19 @@
           </div>
 
           <section class="legend">
-            <span>-95 dB</span>
+            <span id="legendDbStart">-140 dB</span>
             <div class="gradient"></div>
-            <span>-15 dB</span>
+            <span id="legendDbEnd">0 dB</span>
+            <div class="dbRangeControls" aria-label="db display range">
+              <label>
+                <span>low cutoff <output id="dbStartValue">-95 dB</output></span>
+                <input id="dbStartInput" type="range" min="-140" max="0" step="1" value="-95" />
+              </label>
+              <label>
+                <span>high cutoff <output id="dbEndValue">-15 dB</output></span>
+                <input id="dbEndInput" type="range" min="-140" max="0" step="1" value="-15" />
+              </label>
+            </div>
           </section>
         </section>
       </section>
