@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Piezo FFT Visualizer</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="topbar">
+        <div class="titleBlock">
+          <h1>FFT Stream</h1>
+          <p id="status">開始を押してください</p>
+          <p class="hint">iPadでは音声入力の許可後に入力ソースを選べます</p>
+        </div>
+
+        <div class="controls">
+          <div class="actions">
+            <button id="startButton" type="button">開始</button>
+            <button id="pauseButton" type="button" disabled>一時停止</button>
+            <button id="calibrateButton" type="button" disabled>再キャリブレーション</button>
+          </div>
+
+          <label class="sourcePicker">
+            <span>入力ソース</span>
+            <select id="deviceSelect">
+              <option value="">許可後に読み込み</option>
+            </select>
+          </label>
+
+          <div class="settings" aria-label="settings">
+            <label>
+              <span>window</span>
+              <select id="windowSizeInput">
+                <option value="512">512</option>
+                <option value="1024">1024</option>
+                <option value="2048" selected>2048</option>
+                <option value="4096">4096</option>
+                <option value="8192">8192</option>
+                <option value="16384">16384</option>
+              </select>
+            </label>
+            <label>
+              <span>channels</span>
+              <select id="channelsInput">
+                <option value="auto">auto</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+              </select>
+            </label>
+            <label>
+              <span>history s</span>
+              <input id="historyInput" type="number" min="0.25" max="30" step="0.25" value="4" />
+            </label>
+            <label>
+              <span>max Hz</span>
+              <input id="maxFrequencyInput" type="number" min="1" max="96000" step="100" value="10000" />
+            </label>
+            <label>
+              <span>calib s</span>
+              <input id="calibrationInput" type="number" min="0.25" max="20" step="0.25" value="4" />
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <section class="plotArea">
+        <div class="axis yAxis">
+          <span id="freqHigh">-- Hz</span>
+          <span id="freqMid">-- Hz</span>
+          <span id="freqLow">0 Hz</span>
+        </div>
+        <canvas id="spectrogram" aria-label="streaming frequency spectrum"></canvas>
+      </section>
+
+      <section class="legend">
+        <span>-95 dB</span>
+        <div class="gradient"></div>
+        <span>-15 dB</span>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

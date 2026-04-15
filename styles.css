@@ -1,0 +1,231 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background: #111315;
+  color: #f1f3ee;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background:
+    linear-gradient(180deg, rgba(44, 58, 61, 0.7), rgba(17, 19, 21, 0.95)),
+    #111315;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.app {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  width: min(100vw, 1440px);
+  height: 100vh;
+  margin: 0 auto;
+  padding: 18px;
+}
+
+.topbar {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.titleBlock {
+  min-width: min(100%, 320px);
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(24px, 4vw, 44px);
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+p {
+  margin: 8px 0 0;
+  color: #bac3be;
+}
+
+.hint {
+  margin-top: 4px;
+  color: #f6f0d8;
+  font-size: 13px;
+}
+
+.controls {
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+button {
+  min-height: 38px;
+  border: 1px solid #435059;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #f1f3ee;
+  color: #15191b;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+#startButton {
+  border-color: #f0d44e;
+  background: #f0d44e;
+}
+
+.sourcePicker {
+  display: grid;
+  width: min(420px, 100%);
+  gap: 6px;
+  color: #bac3be;
+  font-size: 13px;
+}
+
+.sourcePicker select {
+  width: 100%;
+  border: 1px solid #435059;
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: #f1f3ee;
+  color: #15191b;
+}
+
+.settings {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(86px, 112px));
+  gap: 8px;
+}
+
+.settings label {
+  display: grid;
+  gap: 4px;
+  color: #bac3be;
+  font-size: 12px;
+}
+
+.settings input,
+.settings select {
+  width: 100%;
+  border: 1px solid #435059;
+  border-radius: 8px;
+  padding: 7px 8px;
+  background: #1b2023;
+  color: #f1f3ee;
+  font-variant-numeric: tabular-nums;
+}
+
+button:focus,
+.settings input:focus,
+.settings select:focus,
+.sourcePicker select:focus {
+  outline: 2px solid #f0d44e;
+  outline-offset: 1px;
+}
+
+.plotArea {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  min-height: 0;
+  border: 1px solid #435059;
+  border-radius: 8px;
+  background: #090b0c;
+  overflow: hidden;
+}
+
+.axis {
+  color: #bac3be;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.yAxis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 12px 10px;
+  border-right: 1px solid #2c3338;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 360px;
+}
+
+.legend {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 280px) auto;
+  align-items: center;
+  gap: 10px;
+  color: #bac3be;
+  font-size: 13px;
+}
+
+.gradient {
+  height: 12px;
+  border-radius: 8px;
+  background: linear-gradient(90deg, #071014, #116764, #f0d44e, #f45b44);
+}
+
+@media (max-width: 720px) {
+  .app {
+    gap: 12px;
+    padding: 12px;
+  }
+
+  .topbar {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .controls {
+    width: 100%;
+    justify-items: stretch;
+  }
+
+  .actions {
+    justify-content: stretch;
+  }
+
+  .actions button {
+    flex: 1 1 130px;
+  }
+
+  .settings {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .plotArea {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+
+  .axis {
+    font-size: 11px;
+  }
+}
