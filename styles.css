@@ -387,6 +387,21 @@ canvas {
   letter-spacing: 0;
 }
 
+.clearRecordingsButton {
+  min-height: 32px;
+  padding: 6px 10px;
+  border-color: #f45b44;
+  background: transparent;
+  color: #f45b44;
+  font-size: 13px;
+}
+
+.clearRecordingsButton:hover:not(:disabled),
+.clearRecordingsButton:focus:not(:disabled) {
+  background: #f45b44;
+  color: #15191b;
+}
+
 .iconButton {
   display: inline-grid;
   place-items: center;

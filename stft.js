@@ -2,6 +2,7 @@ const stftCanvas = document.getElementById("stftCanvas");
 const stftCtx = stftCanvas.getContext("2d", { alpha: false });
 const stftStatusEl = document.getElementById("stftStatus");
 const recordingItemsEl = document.getElementById("recordingItems");
+const clearRecordingsButtonEl = document.getElementById("clearRecordingsButton");
 const stftWindowInputEl = document.getElementById("stftWindowInput");
 const stftHopInputEl = document.getElementById("stftHopInput");
 const stftMinFrequencyInputEl = document.getElementById("stftMinFrequencyInput");
@@ -211,8 +212,21 @@ async function putRecording(recording) {
   db.close();
 }
 
+async function clearRecordingStore() {
+  const db = await openRecordingDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction(RECORDING_STORE, "readwrite");
+    const request = transaction.objectStore(RECORDING_STORE).clear();
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  db.close();
+}
+
 function setExportEnabled() {
   const disabled = recordings.length === 0;
+  clearRecordingsButtonEl.disabled = disabled;
   for (const button of recordingItemsEl.querySelectorAll(".recordingDownloadButton")) {
     button.disabled = disabled;
   }
@@ -930,12 +944,40 @@ async function refresh() {
   }
 }
 
+async function clearAllRecordings() {
+  if (recordings.length === 0) {
+    return;
+  }
+  if (!window.confirm("IndexedDBの録音履歴をすべて削除します。よろしいですか？")) {
+    return;
+  }
+
+  for (const timer of memoSaveTimers.values()) {
+    clearTimeout(timer);
+  }
+  memoSaveTimers.clear();
+  clearTimeout(stftReloadTimer);
+
+  await clearRecordingStore();
+  recordings = [];
+  selectedRecordingId = null;
+  selectedRecording = null;
+  stftPayload = null;
+  renderRecordingList();
+  updateAxis();
+  drawStft();
+  setStatus("録音履歴を削除しました");
+}
+
 window.addEventListener("resize", () => {
   resizeCanvas();
   drawStft();
 });
 dbStartInputEl.addEventListener("input", updateDbRange);
 dbEndInputEl.addEventListener("input", updateDbRange);
+clearRecordingsButtonEl.addEventListener("click", () => {
+  clearAllRecordings().catch((error) => setStatus(`削除エラー: ${error.message}`));
+});
 velocityCountInputEl.addEventListener("input", drawStft);
 for (const tab of viewTabEls) {
   tab.addEventListener("click", () => setActiveView(tab.dataset.view || "magnitude"));
