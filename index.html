@@ -16,10 +16,21 @@
         </div>
 
         <div class="controls">
+          <nav class="navLinks" aria-label="pages">
+            <a href="./index.html">Live</a>
+            <a href="./stft.html">STFT履歴</a>
+          </nav>
+
           <div class="actions">
             <button id="startButton" type="button">開始</button>
             <button id="pauseButton" type="button" disabled>一時停止</button>
             <button id="calibrateButton" type="button" disabled>再キャリブレーション</button>
+          </div>
+
+          <div class="recordControls">
+            <button id="recordStartButton" type="button" disabled>録音開始</button>
+            <button id="recordStopButton" type="button" disabled>録音停止</button>
+            <span id="recordStatus">録音待機中</span>
           </div>
 
           <label class="sourcePicker">

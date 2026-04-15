@@ -5,6 +5,9 @@ const statusEl = document.getElementById("status");
 const startButtonEl = document.getElementById("startButton");
 const pauseButtonEl = document.getElementById("pauseButton");
 const calibrateButtonEl = document.getElementById("calibrateButton");
+const recordStartButtonEl = document.getElementById("recordStartButton");
+const recordStopButtonEl = document.getElementById("recordStopButton");
+const recordStatusEl = document.getElementById("recordStatus");
 const deviceSelectEl = document.getElementById("deviceSelect");
 const windowSizeInputEl = document.getElementById("windowSizeInput");
 const channelsInputEl = document.getElementById("channelsInput");
@@ -22,6 +25,7 @@ let audioContext = null;
 let mediaStream = null;
 let sourceNode = null;
 let splitterNode = null;
+let recorderNode = null;
 let analyserNodes = [];
 let frequencyBuffers = [];
 let animationId = null;
@@ -33,6 +37,15 @@ let calibrationFramesSeen = 0;
 let lastFrameAt = 0;
 let isPaused = false;
 let lastLiveStatus = "開始を押してください";
+let isRecording = false;
+let recordingStartedAt = 0;
+let recordingFrameCount = 0;
+let recordingChunks = [];
+let recordingStatusTimer = null;
+
+const DB_NAME = "piezoVisualizerRecordings";
+const DB_VERSION = 1;
+const RECORDING_STORE = "recordings";
 
 let config = {
   sampleRate: 44100,
@@ -122,6 +135,61 @@ function restoreSettings() {
 function setStatus(text) {
   lastLiveStatus = text;
   statusEl.textContent = isPaused ? "一時停止中" : text;
+}
+
+function openRecordingDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(RECORDING_STORE)) {
+        db.createObjectStore(RECORDING_STORE, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveRecording(recording) {
+  const db = await openRecordingDb();
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction(RECORDING_STORE, "readwrite");
+    transaction.objectStore(RECORDING_STORE).put(recording);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  db.close();
+}
+
+function flattenRecordingChunks(chunks, channels, frames) {
+  const output = new Float32Array(frames * channels);
+  let frameOffset = 0;
+
+  for (const chunk of chunks) {
+    const chunkFrames = chunk[0]?.length || 0;
+    for (let frame = 0; frame < chunkFrames; frame += 1) {
+      for (let channel = 0; channel < channels; channel += 1) {
+        output[(frameOffset + frame) * channels + channel] = chunk[channel]?.[frame] || 0;
+      }
+    }
+    frameOffset += chunkFrames;
+  }
+
+  return output;
+}
+
+function updateRecordingStatus() {
+  if (!isRecording) {
+    return;
+  }
+  const elapsed = (performance.now() - recordingStartedAt) / 1000;
+  recordStatusEl.textContent = `録音中 ${elapsed.toFixed(1)}s`;
+}
+
+function setRecordingUi() {
+  recordStartButtonEl.disabled = !mediaStream || isRecording;
+  recordStopButtonEl.disabled = !isRecording;
 }
 
 function resizeCanvas() {
@@ -346,6 +414,12 @@ function stopStream() {
     splitterNode = null;
   }
 
+  if (recorderNode) {
+    recorderNode.disconnect();
+    recorderNode.onaudioprocess = null;
+    recorderNode = null;
+  }
+
   if (mediaStream) {
     for (const track of mediaStream.getTracks()) {
       track.stop();
@@ -357,6 +431,14 @@ function stopStream() {
     audioContext.close();
     audioContext = null;
   }
+
+  if (isRecording) {
+    isRecording = false;
+    recordingChunks = [];
+    recordingFrameCount = 0;
+    recordStatusEl.textContent = "録音を中断しました";
+  }
+  setRecordingUi();
 }
 
 async function loadDevices() {
@@ -435,7 +517,34 @@ function connectAnalyserGraph() {
   }
 
   config.channels = analyserNodes.length || 1;
+  connectRecorderNode();
   resetCalibration();
+}
+
+function connectRecorderNode() {
+  if (!sourceNode || !audioContext) {
+    return;
+  }
+
+  recorderNode = audioContext.createScriptProcessor(4096, config.channels, config.channels);
+  recorderNode.onaudioprocess = (event) => {
+    if (!isRecording) {
+      return;
+    }
+
+    const input = event.inputBuffer;
+    const frames = input.length;
+    const chunk = [];
+    for (let channel = 0; channel < config.channels; channel += 1) {
+      const sourceChannel = Math.min(channel, input.numberOfChannels - 1);
+      chunk.push(new Float32Array(input.getChannelData(sourceChannel)));
+    }
+    recordingChunks.push(chunk);
+    recordingFrameCount += frames;
+  };
+
+  sourceNode.connect(recorderNode);
+  recorderNode.connect(audioContext.destination);
 }
 
 async function startStream() {
@@ -472,12 +581,80 @@ async function startStream() {
     startButtonEl.textContent = "再開始";
     pauseButtonEl.disabled = false;
     calibrateButtonEl.disabled = false;
+    recordStartButtonEl.disabled = false;
+    setRecordingUi();
     lastFrameAt = 0;
     animationId = requestAnimationFrame(animationLoop);
   } catch (error) {
     stopStream();
     setStatus(`エラー: ${error.message}`);
   }
+}
+
+function selectedDeviceLabel() {
+  const option = deviceSelectEl.selectedOptions[0];
+  return option?.textContent || "browser input";
+}
+
+function startRecording() {
+  if (!mediaStream || !audioContext || isRecording) {
+    return;
+  }
+
+  isRecording = true;
+  recordingStartedAt = performance.now();
+  recordingFrameCount = 0;
+  recordingChunks = [];
+  recordStatusEl.textContent = "録音中 0.0s";
+  setRecordingUi();
+  clearInterval(recordingStatusTimer);
+  recordingStatusTimer = setInterval(updateRecordingStatus, 250);
+}
+
+async function stopRecording() {
+  if (!isRecording) {
+    return;
+  }
+
+  isRecording = false;
+  clearInterval(recordingStatusTimer);
+  recordStatusEl.textContent = "保存中";
+  setRecordingUi();
+
+  const chunks = recordingChunks;
+  const frames = recordingFrameCount;
+  recordingChunks = [];
+  recordingFrameCount = 0;
+
+  if (frames === 0) {
+    recordStatusEl.textContent = "録音データなし";
+    setRecordingUi();
+    return;
+  }
+
+  try {
+    const pcm = flattenRecordingChunks(chunks, config.channels, frames);
+    const now = new Date();
+    const id = `${now.toISOString().replace(/[-:]/g, "").replace(/\..+/, "").replace("T", "_")}_${Math.random()
+      .toString(16)
+      .slice(2, 10)}`;
+    const recording = {
+      id,
+      createdAt: now.toISOString(),
+      sampleRate: config.sampleRate,
+      channels: config.channels,
+      frames,
+      durationSeconds: frames / config.sampleRate,
+      deviceLabel: selectedDeviceLabel(),
+      pcm: pcm.buffer,
+    };
+    await saveRecording(recording);
+    recordStatusEl.textContent = `保存完了 ${recording.durationSeconds.toFixed(1)}s`;
+  } catch (error) {
+    recordStatusEl.textContent = `保存エラー: ${error.message}`;
+  }
+
+  setRecordingUi();
 }
 
 function togglePause() {
@@ -499,23 +676,45 @@ window.addEventListener("resize", () => {
   draw();
 });
 
-window.addEventListener("keydown", (event) => {
-  const target = event.target;
-  const isTyping =
+function isEditableTarget(target) {
+  return (
     target instanceof HTMLInputElement ||
     target instanceof HTMLSelectElement ||
     target instanceof HTMLTextAreaElement ||
-    target.isContentEditable;
+    (target instanceof HTMLElement && target.isContentEditable)
+  );
+}
 
-  if (event.code === "Space" && !isTyping && !pauseButtonEl.disabled) {
-    event.preventDefault();
-    togglePause();
-  }
-});
+function isSpaceKey(event) {
+  return event.code === "Space" || event.key === " " || event.key === "Spacebar";
+}
+
+document.addEventListener(
+  "keydown",
+  (event) => {
+    if (isSpaceKey(event) && !isEditableTarget(event.target) && !pauseButtonEl.disabled) {
+      event.preventDefault();
+      togglePause();
+    }
+  },
+  { capture: true }
+);
+
+document.addEventListener(
+  "keyup",
+  (event) => {
+    if (isSpaceKey(event) && !isEditableTarget(event.target) && !pauseButtonEl.disabled) {
+      event.preventDefault();
+    }
+  },
+  { capture: true }
+);
 
 startButtonEl.addEventListener("click", startStream);
 pauseButtonEl.addEventListener("click", togglePause);
 calibrateButtonEl.addEventListener("click", resetCalibration);
+recordStartButtonEl.addEventListener("click", startRecording);
+recordStopButtonEl.addEventListener("click", stopRecording);
 deviceSelectEl.addEventListener("change", restartIfRunning);
 
 for (const input of [
@@ -531,6 +730,7 @@ for (const input of [
 restoreSettings();
 resizeCanvas();
 draw();
+setRecordingUi();
 
 if (window.isSecureContext) {
   loadDevices().catch(() => {

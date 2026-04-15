@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Piezo Recording STFT</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app historyApp">
+      <section class="topbar">
+        <div class="titleBlock">
+          <h1>Recording STFT</h1>
+          <p id="stftStatus">録音履歴を読み込み中</p>
+          <p class="hint">ブラウザ内に保存した録音を選択してSTFTを計算します</p>
+        </div>
+
+        <div class="controls">
+          <nav class="navLinks" aria-label="pages">
+            <a href="./index.html">Live</a>
+            <a href="./stft.html">STFT履歴</a>
+          </nav>
+
+          <div class="exportControls">
+            <button id="downloadImageButton" type="button" disabled>PNG DL</button>
+            <button id="downloadWavButton" type="button" disabled>WAV DL</button>
+          </div>
+
+          <div class="settings stftSettings" aria-label="stft settings">
+            <label>
+              <span>window</span>
+              <select id="stftWindowInput">
+                <option value="512">512</option>
+                <option value="1024">1024</option>
+                <option value="2048" selected>2048</option>
+                <option value="4096">4096</option>
+                <option value="8192">8192</option>
+                <option value="16384">16384</option>
+              </select>
+            </label>
+            <label>
+              <span>hop</span>
+              <input id="stftHopInput" type="number" min="32" max="32768" step="32" value="512" />
+            </label>
+            <label>
+              <span>max Hz</span>
+              <input id="stftMaxFrequencyInput" type="number" min="1" max="96000" step="100" value="10000" />
+            </label>
+            <button id="refreshButton" type="button">更新</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="historyLayout">
+        <aside class="recordingList" aria-label="recordings">
+          <h2>録音履歴</h2>
+          <div id="recordingItems" class="recordingItems"></div>
+        </aside>
+
+        <section class="plotStack">
+          <div class="plotArea">
+            <div class="axis yAxis">
+              <span id="stftFreqHigh">-- Hz</span>
+              <span id="stftFreqMid">-- Hz</span>
+              <span id="stftFreqLow">0 Hz</span>
+            </div>
+            <canvas id="stftCanvas" aria-label="recording stft"></canvas>
+          </div>
+
+          <section class="legend">
+            <span>-95 dB</span>
+            <div class="gradient"></div>
+            <span>-15 dB</span>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <script src="./stft.js"></script>
+  </body>
+</html>
