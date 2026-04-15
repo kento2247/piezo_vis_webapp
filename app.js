@@ -5,10 +5,13 @@ const statusEl = document.getElementById("status");
 const startButtonEl = document.getElementById("startButton");
 const pauseButtonEl = document.getElementById("pauseButton");
 const calibrateButtonEl = document.getElementById("calibrateButton");
-const recordStartButtonEl = document.getElementById("recordStartButton");
-const recordStopButtonEl = document.getElementById("recordStopButton");
+const recordToggleButtonEl = document.getElementById("recordToggleButton");
 const recordStatusEl = document.getElementById("recordStatus");
+const recordPanelEl = document.querySelector(".recordPanel");
+const recordStartIcon = `<svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" /></svg>`;
+const recordStopIcon = `<svg aria-hidden="true" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1" /></svg>`;
 const deviceSelectEl = document.getElementById("deviceSelect");
+const sampleRateInputEl = document.getElementById("sampleRateInput");
 const windowSizeInputEl = document.getElementById("windowSizeInput");
 const channelsInputEl = document.getElementById("channelsInput");
 const historyInputEl = document.getElementById("historyInput");
@@ -26,18 +29,19 @@ let mediaStream = null;
 let sourceNode = null;
 let splitterNode = null;
 let recorderNode = null;
-let analyserNodes = [];
-let frequencyBuffers = [];
-let animationId = null;
 let columns = [];
 let frequencies = [];
+let frequencyBins = [];
+let spectrumBuffers = [];
+let analysisWindow = new Float32Array(0);
 let noiseSums = [];
 let noiseFloor = null;
 let calibrationFramesSeen = 0;
-let lastFrameAt = 0;
 let isPaused = false;
 let lastLiveStatus = "開始を押してください";
 let isRecording = false;
+let recordingRequestPending = false;
+let startStreamPromise = null;
 let recordingStartedAt = 0;
 let recordingFrameCount = 0;
 let recordingChunks = [];
@@ -94,26 +98,39 @@ function numericInput(input, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function sanitizedInput(input, fallback, low, high) {
+  const value = Math.round(clamp(numericInput(input, fallback), low, high));
+  input.value = String(value);
+  return value;
+}
+
 function readSettings() {
-  config.windowSize = Number(windowSizeInputEl.value);
+  const saved = JSON.parse(localStorage.getItem("piezoBrowserSettings") || "{}");
+  const hasLoadedDeviceOptions = [...deviceSelectEl.options].some((option) => option.dataset.realAudioInput === "true");
+  config.sampleRate = sanitizedInput(sampleRateInputEl, 44100, 8000, 192000);
+  config.windowSize = sanitizedInput(windowSizeInputEl, 2048, 128, 32768);
   config.historySeconds = clamp(numericInput(historyInputEl, 4), 0.25, 30);
   config.calibrationSeconds = clamp(numericInput(calibrationInputEl, 4), 0.25, 20);
   config.maxFrequency = clamp(numericInput(maxFrequencyInputEl, 10000), 1, 96000);
   localStorage.setItem(
     "piezoBrowserSettings",
     JSON.stringify({
+      sampleRate: String(config.sampleRate),
       windowSize: String(config.windowSize),
       channels: channelsInputEl.value,
       historySeconds: String(config.historySeconds),
       maxFrequency: String(config.maxFrequency),
       calibrationSeconds: String(config.calibrationSeconds),
-      deviceId: deviceSelectEl.value,
+      deviceId: hasLoadedDeviceOptions ? deviceSelectEl.value : saved.deviceId || "",
     })
   );
 }
 
 function restoreSettings() {
   const saved = JSON.parse(localStorage.getItem("piezoBrowserSettings") || "{}");
+  if (saved.sampleRate) {
+    sampleRateInputEl.value = saved.sampleRate;
+  }
   if (saved.windowSize) {
     windowSizeInputEl.value = saved.windowSize;
   }
@@ -184,12 +201,23 @@ function updateRecordingStatus() {
     return;
   }
   const elapsed = (performance.now() - recordingStartedAt) / 1000;
-  recordStatusEl.textContent = `録音中 ${elapsed.toFixed(1)}s`;
+  recordStatusEl.textContent = `${elapsed.toFixed(1)}s`;
+}
+
+function setRecordingActive(active) {
+  recordPanelEl?.classList.toggle("recordingActive", active);
+  recordStatusEl.classList.toggle("recordingActive", active);
 }
 
 function setRecordingUi() {
-  recordStartButtonEl.disabled = !mediaStream || isRecording;
-  recordStopButtonEl.disabled = !isRecording;
+  recordToggleButtonEl.disabled = recordingRequestPending;
+  recordToggleButtonEl.classList.toggle("recordingActive", isRecording);
+  recordToggleButtonEl.classList.toggle("recordStartAction", !isRecording);
+  recordToggleButtonEl.classList.toggle("recordStopAction", isRecording);
+  recordToggleButtonEl.innerHTML = isRecording ? recordStopIcon : recordStartIcon;
+  recordToggleButtonEl.title = isRecording ? "録音を停止" : "録音を開始";
+  recordToggleButtonEl.setAttribute("aria-label", isRecording ? "録音を停止" : "録音を開始");
+  setRecordingActive(isRecording);
 }
 
 function resizeCanvas() {
@@ -307,17 +335,24 @@ function resetCalibration() {
 function buildFrequencies() {
   const nyquist = config.sampleRate / 2;
   const high = Math.min(config.maxFrequency, nyquist);
-  const rawBinCount = config.windowSize / 2;
+  const rawBinCount = Math.floor(config.windowSize / 2) + 1;
   const result = [];
+  const bins = [];
 
   for (let bin = 0; bin < rawBinCount; bin += 1) {
     const frequency = (bin * config.sampleRate) / config.windowSize;
     if (frequency <= high) {
       result.push(frequency);
+      bins.push(bin);
     }
   }
 
   frequencies = result;
+  frequencyBins = bins;
+  analysisWindow = new Float32Array(config.windowSize);
+  for (let i = 0; i < config.windowSize; i += 1) {
+    analysisWindow[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (config.windowSize - 1));
+  }
   syncFrequencyLabels();
 }
 
@@ -325,26 +360,116 @@ function calibrationFramesNeeded() {
   return Math.max(1, Math.ceil((config.calibrationSeconds * config.sampleRate) / config.windowSize));
 }
 
-function dbToMagnitude(db) {
-  return 10 ** (db / 20);
-}
-
 function magnitudeToDb(magnitude) {
   return 20 * Math.log10(Math.max(magnitude, 1.0e-10));
 }
 
-function readSpectrumColumn() {
-  const visibleBins = frequencies.length;
+function isPowerOfTwo(value) {
+  return value > 0 && (value & (value - 1)) === 0;
+}
+
+function fftReal(input) {
+  const n = input.length;
+  const real = new Float32Array(input);
+  const imag = new Float32Array(n);
+
+  for (let i = 1, j = 0; i < n; i += 1) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) {
+      j ^= bit;
+    }
+    j ^= bit;
+    if (i < j) {
+      const tr = real[i];
+      real[i] = real[j];
+      real[j] = tr;
+    }
+  }
+
+  for (let len = 2; len <= n; len <<= 1) {
+    const angle = (-2 * Math.PI) / len;
+    const wlenR = Math.cos(angle);
+    const wlenI = Math.sin(angle);
+    for (let i = 0; i < n; i += len) {
+      let wr = 1;
+      let wi = 0;
+      for (let j = 0; j < len / 2; j += 1) {
+        const uR = real[i + j];
+        const uI = imag[i + j];
+        const vR = real[i + j + len / 2] * wr - imag[i + j + len / 2] * wi;
+        const vI = real[i + j + len / 2] * wi + imag[i + j + len / 2] * wr;
+        real[i + j] = uR + vR;
+        imag[i + j] = uI + vI;
+        real[i + j + len / 2] = uR - vR;
+        imag[i + j + len / 2] = uI - vI;
+        const nextWr = wr * wlenR - wi * wlenI;
+        wi = wr * wlenI + wi * wlenR;
+        wr = nextWr;
+      }
+    }
+  }
+
+  return { real, imag };
+}
+
+function dftMagnitude(frame, bin) {
+  let real = 0;
+  let imag = 0;
+  const angleStep = (-2 * Math.PI * bin) / frame.length;
+  for (let i = 0; i < frame.length; i += 1) {
+    const angle = angleStep * i;
+    real += frame[i] * Math.cos(angle);
+    imag += frame[i] * Math.sin(angle);
+  }
+  return Math.hypot(real, imag);
+}
+
+function spectrumForFrame(samples) {
+  const frame = new Float32Array(config.windowSize);
+  for (let i = 0; i < config.windowSize; i += 1) {
+    frame[i] = samples[i] * analysisWindow[i];
+  }
+
+  if (isPowerOfTwo(config.windowSize)) {
+    const spectrum = fftReal(frame);
+    return frequencyBins.map((bin) => Math.hypot(spectrum.real[bin], spectrum.imag[bin]) / (config.windowSize / 2));
+  }
+
+  return frequencyBins.map((bin) => dftMagnitude(frame, bin) / (config.windowSize / 2));
+}
+
+function appendChannelBuffer(channel, samples) {
+  const current = spectrumBuffers[channel] || new Float32Array(0);
+  const next = new Float32Array(current.length + samples.length);
+  next.set(current);
+  next.set(samples, current.length);
+  spectrumBuffers[channel] = next;
+}
+
+function consumeSpectrumFrame() {
+  if (spectrumBuffers.length === 0 || spectrumBuffers.some((buffer) => buffer.length < config.windowSize)) {
+    return null;
+  }
+
+  const frame = spectrumBuffers.map((buffer, channel) => {
+    const samples = buffer.slice(0, config.windowSize);
+    spectrumBuffers[channel] = buffer.slice(config.windowSize);
+    return samples;
+  });
+
+  return frame;
+}
+
+function makeSpectrumColumn(frame) {
   const column = [];
 
-  for (let channel = 0; channel < analyserNodes.length; channel += 1) {
-    const buffer = frequencyBuffers[channel];
-    analyserNodes[channel].getFloatFrequencyData(buffer);
-    const output = new Array(visibleBins);
+  for (let channel = 0; channel < frame.length; channel += 1) {
+    const magnitudes = spectrumForFrame(frame[channel]);
+    const output = new Array(frequencies.length);
 
-    for (let bin = 0; bin < visibleBins; bin += 1) {
-      const db = Number.isFinite(buffer[bin]) ? buffer[bin] : minDb;
-      const magnitude = dbToMagnitude(db);
+    for (let bin = 0; bin < frequencies.length; bin += 1) {
+      const magnitude = magnitudes[bin];
+      const db = magnitudeToDb(magnitude);
 
       if (noiseFloor === null) {
         noiseSums[channel][bin] += magnitude;
@@ -377,33 +502,25 @@ function readSpectrumColumn() {
   return column;
 }
 
-function animationLoop(now) {
-  animationId = requestAnimationFrame(animationLoop);
-
-  if (isPaused || analyserNodes.length === 0) {
+function processSpectrumFrames() {
+  if (isPaused) {
+    spectrumBuffers = spectrumBuffers.map((buffer) => buffer.slice(Math.max(0, buffer.length - config.windowSize)));
+    return;
+  }
+  if (frequencyBins.length === 0) {
     return;
   }
 
-  const frameMs = (config.windowSize / config.sampleRate) * 1000;
-  if (now - lastFrameAt < frameMs) {
-    return;
+  let frame = consumeSpectrumFrame();
+  while (frame) {
+    columns.push(makeSpectrumColumn(frame));
+    trimColumns();
+    frame = consumeSpectrumFrame();
   }
-
-  lastFrameAt = now;
-  columns.push(readSpectrumColumn());
-  trimColumns();
   draw();
 }
 
 function stopStream() {
-  if (animationId !== null) {
-    cancelAnimationFrame(animationId);
-    animationId = null;
-  }
-
-  analyserNodes = [];
-  frequencyBuffers = [];
-
   if (sourceNode) {
     sourceNode.disconnect();
     sourceNode = null;
@@ -432,6 +549,8 @@ function stopStream() {
     audioContext = null;
   }
 
+  spectrumBuffers = [];
+
   if (isRecording) {
     isRecording = false;
     recordingChunks = [];
@@ -441,7 +560,7 @@ function stopStream() {
   setRecordingUi();
 }
 
-async function loadDevices() {
+async function loadDevices(preferredDeviceId = null) {
   if (!navigator.mediaDevices?.enumerateDevices) {
     return;
   }
@@ -449,11 +568,24 @@ async function loadDevices() {
   const devices = await navigator.mediaDevices.enumerateDevices();
   const inputs = devices.filter((device) => device.kind === "audioinput");
   const saved = JSON.parse(localStorage.getItem("piezoBrowserSettings") || "{}");
+  const selectedDeviceId = preferredDeviceId ?? deviceSelectEl.value ?? saved.deviceId ?? "";
+  const canIdentifyDevices = Boolean(mediaStream) || inputs.some((device) => device.label || device.deviceId);
 
   deviceSelectEl.innerHTML = "";
+
+  if (!canIdentifyDevices) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "開始後に読み込み";
+    deviceSelectEl.appendChild(option);
+    return;
+  }
+
   for (const [index, device] of inputs.entries()) {
     const option = document.createElement("option");
     option.value = device.deviceId;
+    option.dataset.audioInput = "true";
+    option.dataset.realAudioInput = device.deviceId ? "true" : "false";
     option.textContent = device.label || `Audio input ${index + 1}`;
     deviceSelectEl.appendChild(option);
   }
@@ -466,7 +598,10 @@ async function loadDevices() {
     return;
   }
 
-  if (saved.deviceId && inputs.some((device) => device.deviceId === saved.deviceId)) {
+  const match = inputs.find((device) => device.deviceId === selectedDeviceId);
+  if (match) {
+    deviceSelectEl.value = match.deviceId;
+  } else if (saved.deviceId && inputs.some((device) => device.deviceId === saved.deviceId)) {
     deviceSelectEl.value = saved.deviceId;
   }
 }
@@ -481,42 +616,42 @@ function requestedChannelCount(track) {
   return settings.channelCount && settings.channelCount >= 2 ? 2 : 1;
 }
 
+async function requestAudioStream(selectedDevice, baseConstraints) {
+  if (!selectedDevice) {
+    return navigator.mediaDevices.getUserMedia({ audio: baseConstraints });
+  }
+
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: {
+        ...baseConstraints,
+        deviceId: { exact: selectedDevice },
+      },
+    });
+  } catch (error) {
+    if (!["OverconstrainedError", "NotFoundError", "NotReadableError"].includes(error.name)) {
+      throw error;
+    }
+    return navigator.mediaDevices.getUserMedia({
+      audio: {
+        ...baseConstraints,
+        deviceId: { ideal: selectedDevice },
+      },
+    });
+  }
+}
+
 function connectAnalyserGraph() {
   sourceNode = audioContext.createMediaStreamSource(mediaStream);
-  splitterNode = audioContext.createChannelSplitter(2);
-  sourceNode.connect(splitterNode);
 
   const [track] = mediaStream.getAudioTracks();
   config.channels = requestedChannelCount(track);
   config.sampleRate = audioContext.sampleRate;
-  config.windowSize = Number(windowSizeInputEl.value);
+  sampleRateInputEl.value = String(Math.round(config.sampleRate));
+  config.windowSize = sanitizedInput(windowSizeInputEl, config.windowSize, 128, 32768);
 
   buildFrequencies();
-  analyserNodes = [];
-  frequencyBuffers = [];
-
-  for (let channel = 0; channel < config.channels; channel += 1) {
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = config.windowSize;
-    analyser.minDecibels = minDb;
-    analyser.maxDecibels = maxDb;
-    analyser.smoothingTimeConstant = 0;
-
-    try {
-      splitterNode.connect(analyser, channel);
-    } catch {
-      if (channel === 0) {
-        sourceNode.connect(analyser);
-      } else {
-        break;
-      }
-    }
-
-    analyserNodes.push(analyser);
-    frequencyBuffers.push(new Float32Array(analyser.frequencyBinCount));
-  }
-
-  config.channels = analyserNodes.length || 1;
+  spectrumBuffers = Array.from({ length: config.channels }, () => new Float32Array(0));
   connectRecorderNode();
   resetCalibration();
 }
@@ -528,19 +663,21 @@ function connectRecorderNode() {
 
   recorderNode = audioContext.createScriptProcessor(4096, config.channels, config.channels);
   recorderNode.onaudioprocess = (event) => {
-    if (!isRecording) {
-      return;
-    }
-
     const input = event.inputBuffer;
     const frames = input.length;
     const chunk = [];
     for (let channel = 0; channel < config.channels; channel += 1) {
       const sourceChannel = Math.min(channel, input.numberOfChannels - 1);
-      chunk.push(new Float32Array(input.getChannelData(sourceChannel)));
+      const samples = new Float32Array(input.getChannelData(sourceChannel));
+      appendChannelBuffer(channel, samples);
+      chunk.push(samples);
     }
-    recordingChunks.push(chunk);
-    recordingFrameCount += frames;
+    processSpectrumFrames();
+
+    if (isRecording) {
+      recordingChunks.push(chunk);
+      recordingFrameCount += frames;
+    }
   };
 
   sourceNode.connect(recorderNode);
@@ -548,46 +685,62 @@ function connectRecorderNode() {
 }
 
 async function startStream() {
+  if (startStreamPromise) {
+    return startStreamPromise;
+  }
+
+  startStreamPromise = startStreamInternal().finally(() => {
+    startStreamPromise = null;
+  });
+  return startStreamPromise;
+}
+
+async function startStreamInternal() {
   const BrowserAudioContext = window.AudioContext || window.webkitAudioContext;
   if (!navigator.mediaDevices?.getUserMedia || !BrowserAudioContext) {
     setStatus("このブラウザはマイク入力に対応していません");
-    return;
+    return false;
   }
 
   readSettings();
   stopStream();
 
+  const selectedDevice = deviceSelectEl.value;
   try {
     setStatus("マイク許可を待っています");
-    const selectedDevice = deviceSelectEl.value;
     const audioConstraints = {
       echoCancellation: false,
       noiseSuppression: false,
       autoGainControl: false,
+      sampleRate: { ideal: config.sampleRate },
     };
 
-    if (selectedDevice) {
-      audioConstraints.deviceId = { exact: selectedDevice };
+    mediaStream = await requestAudioStream(selectedDevice, audioConstraints);
+    try {
+      audioContext = new BrowserAudioContext({ sampleRate: config.sampleRate });
+    } catch {
+      audioContext = new BrowserAudioContext();
     }
-
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
-    audioContext = new BrowserAudioContext();
     if (audioContext.state === "suspended") {
       await audioContext.resume();
     }
 
-    await loadDevices();
+    const [track] = mediaStream.getAudioTracks();
+    await loadDevices(track?.getSettings?.().deviceId || selectedDevice);
     connectAnalyserGraph();
     startButtonEl.textContent = "再開始";
     pauseButtonEl.disabled = false;
     calibrateButtonEl.disabled = false;
-    recordStartButtonEl.disabled = false;
     setRecordingUi();
-    lastFrameAt = 0;
-    animationId = requestAnimationFrame(animationLoop);
+    readSettings();
+    if (deviceSelectEl.options.length <= 1) {
+      setStatus("入力ソースはブラウザが公開した1件のみです");
+    }
+    return true;
   } catch (error) {
     stopStream();
     setStatus(`エラー: ${error.message}`);
+    return false;
   }
 }
 
@@ -596,26 +749,43 @@ function selectedDeviceLabel() {
   return option?.textContent || "browser input";
 }
 
-function startRecording() {
-  if (!mediaStream || !audioContext || isRecording) {
-    return;
+async function startRecording() {
+  if (!mediaStream || !audioContext || isRecording || recordingRequestPending) {
+    if (mediaStream || audioContext || isRecording || recordingRequestPending) {
+      return;
+    }
+
+    recordingRequestPending = true;
+    setRecordingUi();
+    recordStatusEl.textContent = "開始中";
+    const started = await startStream();
+    recordingRequestPending = false;
+    setRecordingUi();
+    if (!started || !mediaStream || !audioContext) {
+      recordStatusEl.textContent = "0.0s";
+      return;
+    }
   }
 
+  recordingRequestPending = true;
   isRecording = true;
   recordingStartedAt = performance.now();
   recordingFrameCount = 0;
   recordingChunks = [];
-  recordStatusEl.textContent = "録音中 0.0s";
+  recordStatusEl.textContent = "0.0s";
   setRecordingUi();
   clearInterval(recordingStatusTimer);
-  recordingStatusTimer = setInterval(updateRecordingStatus, 250);
+  recordingStatusTimer = setInterval(updateRecordingStatus, 100);
+  recordingRequestPending = false;
+  setRecordingUi();
 }
 
 async function stopRecording() {
-  if (!isRecording) {
+  if (!isRecording || recordingRequestPending) {
     return;
   }
 
+  recordingRequestPending = true;
   isRecording = false;
   clearInterval(recordingStatusTimer);
   recordStatusEl.textContent = "保存中";
@@ -628,6 +798,7 @@ async function stopRecording() {
 
   if (frames === 0) {
     recordStatusEl.textContent = "録音データなし";
+    recordingRequestPending = false;
     setRecordingUi();
     return;
   }
@@ -650,12 +821,24 @@ async function stopRecording() {
       pcm: pcm.buffer,
     };
     await saveRecording(recording);
-    recordStatusEl.textContent = `保存完了 ${recording.durationSeconds.toFixed(1)}s`;
+    recordStatusEl.textContent = `${recording.durationSeconds.toFixed(1)}s`;
   } catch (error) {
     recordStatusEl.textContent = `保存エラー: ${error.message}`;
   }
 
+  recordingRequestPending = false;
   setRecordingUi();
+}
+
+function toggleRecording() {
+  if (recordingRequestPending) {
+    return;
+  }
+  if (isRecording) {
+    stopRecording();
+    return;
+  }
+  startRecording();
 }
 
 function togglePause() {
@@ -714,11 +897,20 @@ document.addEventListener(
 startButtonEl.addEventListener("click", startStream);
 pauseButtonEl.addEventListener("click", togglePause);
 calibrateButtonEl.addEventListener("click", resetCalibration);
-recordStartButtonEl.addEventListener("click", startRecording);
-recordStopButtonEl.addEventListener("click", stopRecording);
+recordToggleButtonEl.addEventListener("click", toggleRecording);
 deviceSelectEl.addEventListener("change", restartIfRunning);
 
+if (navigator.mediaDevices?.addEventListener) {
+  navigator.mediaDevices.addEventListener("devicechange", () => {
+    const selectedDevice = deviceSelectEl.value;
+    loadDevices(selectedDevice).catch(() => {
+      setStatus("入力ソースの更新に失敗しました");
+    });
+  });
+}
+
 for (const input of [
+  sampleRateInputEl,
   windowSizeInputEl,
   channelsInputEl,
   historyInputEl,

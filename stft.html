@@ -10,58 +10,63 @@
     <main class="app historyApp">
       <section class="topbar">
         <div class="titleBlock">
-          <h1>Recording STFT</h1>
+          <h1>録音分析</h1>
           <p id="stftStatus">録音履歴を読み込み中</p>
-          <p class="hint">ブラウザ内に保存した録音を選択してSTFTを計算します</p>
         </div>
 
+        <nav class="navLinks modeSwitch" aria-label="pages">
+          <a href="./index.html">ストリーミング</a>
+          <a class="active" href="./stft.html">録音分析</a>
+        </nav>
+      </section>
+
+      <section class="controlDeck" aria-label="analysis controls">
         <div class="controls">
-          <nav class="navLinks" aria-label="pages">
-            <a href="./index.html">Live</a>
-            <a href="./stft.html">STFT履歴</a>
-          </nav>
-
-          <div class="exportControls">
-            <button id="downloadImageButton" type="button" disabled>PNG DL</button>
-            <button id="downloadWavButton" type="button" disabled>WAV DL</button>
-          </div>
-
-          <div class="settings stftSettings" aria-label="stft settings">
-            <label>
-              <span>window</span>
-              <select id="stftWindowInput">
-                <option value="512">512</option>
-                <option value="1024">1024</option>
-                <option value="2048" selected>2048</option>
-                <option value="4096">4096</option>
-                <option value="8192">8192</option>
-                <option value="16384">16384</option>
-              </select>
-            </label>
-            <label>
-              <span>hop</span>
-              <input id="stftHopInput" type="number" min="32" max="32768" step="32" value="512" />
-            </label>
-            <label>
-              <span>min Hz</span>
-              <input id="stftMinFrequencyInput" type="number" min="0" max="96000" step="100" value="0" />
-            </label>
-            <label>
-              <span>max Hz</span>
-              <input id="stftMaxFrequencyInput" type="number" min="1" max="96000" step="100" value="10000" />
-            </label>
-            <button id="refreshButton" type="button">更新</button>
+          <div class="controlGroup wideGroup">
+            <div class="settings stftSettings" aria-label="stft settings">
+              <label>
+                <span>window</span>
+                <input id="stftWindowInput" type="number" min="128" max="32768" step="128" value="2048" />
+              </label>
+              <label>
+                <span>hop</span>
+                <input id="stftHopInput" type="number" min="32" max="32768" step="32" value="512" />
+              </label>
+              <label>
+                <span>min Hz</span>
+                <input id="stftMinFrequencyInput" type="number" min="0" max="96000" step="100" value="0" />
+              </label>
+              <label>
+                <span>max Hz</span>
+                <input id="stftMaxFrequencyInput" type="number" min="1" max="96000" step="100" value="10000" />
+              </label>
+              <label>
+                <span>velocity N</span>
+                <input id="velocityCountInput" type="number" min="1" max="24" step="1" value="6" />
+              </label>
+            </div>
           </div>
         </div>
       </section>
 
       <section class="historyLayout">
         <aside class="recordingList" aria-label="recordings">
-          <h2>録音履歴</h2>
+          <div class="recordingListHeader">
+            <h2>録音履歴</h2>
+          </div>
           <div id="recordingItems" class="recordingItems"></div>
         </aside>
 
         <section class="plotStack">
+          <div class="plotToolbar">
+            <span>表示切り替え</span>
+            <div class="viewTabs" role="tablist" aria-label="stft views">
+              <button class="viewTab active" type="button" role="tab" aria-selected="true" data-view="magnitude">振幅</button>
+              <button class="viewTab" type="button" role="tab" aria-selected="false" data-view="phase">位相</button>
+              <button class="viewTab" type="button" role="tab" aria-selected="false" data-view="phaseAmplitude">位相+振幅</button>
+              <button class="viewTab" type="button" role="tab" aria-selected="false" data-view="collapseVelocity">崩落線+速度</button>
+            </div>
+          </div>
           <div class="plotArea">
             <div class="axis yAxis">
               <span id="stftFreqHigh">-- Hz</span>

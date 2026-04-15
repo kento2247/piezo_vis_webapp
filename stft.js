@@ -6,9 +6,7 @@ const stftWindowInputEl = document.getElementById("stftWindowInput");
 const stftHopInputEl = document.getElementById("stftHopInput");
 const stftMinFrequencyInputEl = document.getElementById("stftMinFrequencyInput");
 const stftMaxFrequencyInputEl = document.getElementById("stftMaxFrequencyInput");
-const refreshButtonEl = document.getElementById("refreshButton");
-const downloadImageButtonEl = document.getElementById("downloadImageButton");
-const downloadWavButtonEl = document.getElementById("downloadWavButton");
+const velocityCountInputEl = document.getElementById("velocityCountInput");
 const stftFreqHighEl = document.getElementById("stftFreqHigh");
 const stftFreqMidEl = document.getElementById("stftFreqMid");
 const stftFreqLowEl = document.getElementById("stftFreqLow");
@@ -18,6 +16,9 @@ const dbStartValueEl = document.getElementById("dbStartValue");
 const dbEndValueEl = document.getElementById("dbEndValue");
 const legendDbStartEl = document.getElementById("legendDbStart");
 const legendDbEndEl = document.getElementById("legendDbEnd");
+const viewTabEls = Array.from(document.querySelectorAll(".viewTab"));
+const imageIconSvg = `<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Zm0 15.5-4.7-5.6a1 1 0 0 0-1.5 0l-2.1 2.5-1.2-1.4a1 1 0 0 0-1.5 0L5 17.5V5h14v13.5ZM8.5 10A1.5 1.5 0 1 0 8.5 7a1.5 1.5 0 0 0 0 3Z" /></svg>`;
+const wavIconSvg = `<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3a1 1 0 0 1 1 1v9.6l2.8-2.8a1 1 0 1 1 1.4 1.4l-4.5 4.5a1 1 0 0 1-1.4 0l-4.5-4.5a1 1 0 1 1 1.4-1.4l2.8 2.8V4a1 1 0 0 1 1-1ZM5 19a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1Z" /></svg>`;
 
 let dbStart = -95;
 let dbEnd = -15;
@@ -33,6 +34,7 @@ let selectedRecording = null;
 let stftPayload = null;
 let memoSaveTimers = new Map();
 let stftReloadTimer = null;
+let activeView = "magnitude";
 
 function clamp(value, low, high) {
   return Math.min(high, Math.max(low, value));
@@ -74,6 +76,48 @@ function colorForDb(db) {
   return scaleColorForDb(db);
 }
 
+function colorForPhase(phase, value = 1) {
+  const hue = ((((phase + Math.PI) / (2 * Math.PI)) % 1) + 1) % 1;
+  const sector = hue * 6;
+  const c = clamp(value, 0, 1);
+  const x = c * (1 - Math.abs((sector % 2) - 1));
+  let r = 0;
+  let g = 0;
+  let b = 0;
+
+  if (sector < 1) {
+    r = c;
+    g = x;
+  } else if (sector < 2) {
+    r = x;
+    g = c;
+  } else if (sector < 3) {
+    g = c;
+    b = x;
+  } else if (sector < 4) {
+    g = x;
+    b = c;
+  } else if (sector < 5) {
+    r = x;
+    b = c;
+  } else {
+    r = c;
+    b = x;
+  }
+
+  const floor = 18;
+  const scale = 237;
+  return [
+    Math.round(floor + r * scale),
+    Math.round(floor + g * scale),
+    Math.round(floor + b * scale),
+  ];
+}
+
+function valueForDb(db) {
+  return clamp((db - dbStart) / Math.max(1, dbEnd - dbStart), 0, 1);
+}
+
 function syncDbRangeControls() {
   const start = Math.min(Number(dbStartInputEl.value), Number(dbEndInputEl.value) - 1);
   const end = Math.max(Number(dbEndInputEl.value), start + 1);
@@ -93,6 +137,16 @@ function updateDbRange() {
   drawStft();
 }
 
+function setActiveView(view) {
+  activeView = view;
+  for (const tab of viewTabEls) {
+    const selected = tab.dataset.view === view;
+    tab.classList.toggle("active", selected);
+    tab.setAttribute("aria-selected", selected ? "true" : "false");
+  }
+  drawStft();
+}
+
 function setStatus(message) {
   stftStatusEl.textContent = message;
 }
@@ -100,6 +154,12 @@ function setStatus(message) {
 function numericInput(input, fallback) {
   const parsed = Number(input.value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function sanitizedInput(input, fallback, low, high) {
+  const value = Math.round(clamp(numericInput(input, fallback), low, high));
+  input.value = String(value);
+  return value;
 }
 
 function formatDuration(seconds) {
@@ -151,9 +211,29 @@ async function putRecording(recording) {
   db.close();
 }
 
-function setExportEnabled(hasStft) {
-  downloadImageButtonEl.disabled = !hasStft;
-  downloadWavButtonEl.disabled = !selectedRecording;
+function setExportEnabled() {
+  const disabled = recordings.length === 0;
+  for (const button of recordingItemsEl.querySelectorAll(".recordingDownloadButton")) {
+    button.disabled = disabled;
+  }
+}
+
+function createRecordingDownloadButton(label, iconSvg, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "recordingDownloadButton";
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.innerHTML = iconSvg;
+  button.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    try {
+      await onClick();
+    } catch (error) {
+      setStatus(`保存エラー: ${error.message}`);
+    }
+  });
+  return button;
 }
 
 function renderRecordingList() {
@@ -203,12 +283,29 @@ function renderRecordingList() {
     memoInput.placeholder = "タスク名、条件、メモ";
     memoInput.addEventListener("input", () => scheduleMemoSave(recording.id, memoInput.value));
 
+    const downloadActions = document.createElement("div");
+    downloadActions.className = "recordingDownloadActions";
+    downloadActions.append(
+      createRecordingDownloadButton("この録音の画像PNGを保存", imageIconSvg, () =>
+        downloadRecordingImage(recording.id)
+      ),
+      createRecordingDownloadButton("この録音のWAVを保存", wavIconSvg, () =>
+        downloadRecordingWav(recording.id)
+      )
+    );
+
+    const itemTop = document.createElement("div");
+    itemTop.className = "recordingItemTop";
+
     selectButton.append(title, meta, device);
     selectButton.addEventListener("click", () => selectRecording(recording.id));
     memoLabel.append(memoTitle, memoInput);
-    item.append(selectButton, memoLabel);
+    itemTop.append(selectButton, downloadActions);
+    item.append(itemTop, memoLabel);
     recordingItemsEl.appendChild(item);
   }
+
+  setExportEnabled();
 }
 
 function updateLocalMemo(recordingId, memo) {
@@ -319,6 +416,31 @@ function fftReal(input) {
   return { real, imag };
 }
 
+function isPowerOfTwo(value) {
+  return value > 0 && (value & (value - 1)) === 0;
+}
+
+function dftBins(input, bins) {
+  const real = new Float32Array(bins.length);
+  const imag = new Float32Array(bins.length);
+
+  for (let binIndex = 0; binIndex < bins.length; binIndex += 1) {
+    const bin = bins[binIndex];
+    const angleStep = (-2 * Math.PI * bin) / input.length;
+    let sumReal = 0;
+    let sumImag = 0;
+    for (let i = 0; i < input.length; i += 1) {
+      const angle = angleStep * i;
+      sumReal += input[i] * Math.cos(angle);
+      sumImag += input[i] * Math.sin(angle);
+    }
+    real[binIndex] = sumReal;
+    imag[binIndex] = sumImag;
+  }
+
+  return { real, imag };
+}
+
 function channelFrame(pcm, start, channel, channels, window) {
   const frame = new Float32Array(window.length);
   for (let i = 0; i < window.length; i += 1) {
@@ -328,7 +450,7 @@ function channelFrame(pcm, start, channel, channels, window) {
 }
 
 function computeStft(recording) {
-  const windowSize = Number(stftWindowInputEl.value);
+  const windowSize = sanitizedInput(stftWindowInputEl, 2048, 128, 32768);
   const hopSize = Math.max(32, Math.round(numericInput(stftHopInputEl, 512)));
   const { minFrequency, maxFrequency } = selectedFrequencyRange();
   const pcm = new Float32Array(recording.pcm);
@@ -339,7 +461,7 @@ function computeStft(recording) {
 
   const nyquist = recording.sampleRate / 2;
   const high = Math.min(maxFrequency, nyquist);
-  const binCount = windowSize / 2 + 1;
+  const binCount = Math.floor(windowSize / 2) + 1;
   const frequencies = [];
   const frequencyBins = [];
   for (let bin = 0; bin < binCount; bin += 1) {
@@ -367,19 +489,23 @@ function computeStft(recording) {
 
   const columns = starts.map((start) => {
     const channelColumns = [];
+    const channelPhases = [];
     for (let channel = 0; channel < recording.channels; channel += 1) {
       const frame = channelFrame(pcm, start, channel, recording.channels, window);
-      const spectrum = fftReal(frame);
+      const spectrum = isPowerOfTwo(windowSize) ? fftReal(frame) : dftBins(frame, frequencyBins);
       const magnitudes = new Array(frequencies.length);
+      const phases = new Array(frequencies.length);
       for (let index = 0; index < frequencyBins.length; index += 1) {
-        const bin = frequencyBins[index];
+        const bin = isPowerOfTwo(windowSize) ? frequencyBins[index] : index;
         const magnitude =
           Math.hypot(spectrum.real[bin], spectrum.imag[bin]) / (windowSize / 2);
         magnitudes[index] = 20 * Math.log10(Math.max(magnitude, 1.0e-10));
+        phases[index] = Math.atan2(spectrum.imag[bin], spectrum.real[bin]);
       }
       channelColumns.push(magnitudes);
+      channelPhases.push(phases);
     }
-    return channelColumns;
+    return { channelColumns, channelPhases };
   });
 
   return {
@@ -389,7 +515,8 @@ function computeStft(recording) {
     channels: recording.channels,
     frequencies,
     times: starts.map((start) => start / recording.sampleRate),
-    magnitudesDb: columns,
+    magnitudesDb: columns.map((column) => column.channelColumns),
+    phases: columns.map((column) => column.channelPhases),
   };
 }
 
@@ -443,12 +570,41 @@ function updateAxis() {
   stftFreqHighEl.textContent = `${Math.round(high).toLocaleString()} Hz`;
 }
 
-function drawChannel(columns, channelIndex, yStart, channelHeight) {
-  const width = stftCanvas.width;
+function binRect(bin, yStart, channelHeight) {
   const frequencies = stftPayload.frequencies || [];
   const lowFrequency = frequencies[0] || 0;
   const highFrequency = frequencies[frequencies.length - 1] || 1;
   const frequencySpan = Math.max(1, highFrequency - lowFrequency);
+  const current = clamp(frequencies[bin], lowFrequency, highFrequency);
+  const previous = clamp(frequencies[Math.max(0, bin - 1)] ?? lowFrequency, lowFrequency, highFrequency);
+  const next = clamp(frequencies[Math.min(frequencies.length - 1, bin + 1)] ?? highFrequency, lowFrequency, highFrequency);
+  const low = bin === 0 ? lowFrequency : (previous + current) / 2;
+  const high = bin === frequencies.length - 1 ? highFrequency : (current + next) / 2;
+  const y = yStart + channelHeight - Math.ceil(((high - lowFrequency) / frequencySpan) * channelHeight);
+  const nextY = yStart + channelHeight - Math.ceil(((low - lowFrequency) / frequencySpan) * channelHeight);
+  return { y, height: Math.max(1, nextY - y) };
+}
+
+function yForFrequency(frequency, yStart, channelHeight) {
+  const frequencies = stftPayload.frequencies || [];
+  const lowFrequency = frequencies[0] || 0;
+  const highFrequency = frequencies[frequencies.length - 1] || 1;
+  const frequencySpan = Math.max(1, highFrequency - lowFrequency);
+  return yStart + channelHeight - ((clamp(frequency, lowFrequency, highFrequency) - lowFrequency) / frequencySpan) * channelHeight;
+}
+
+function drawChannelLabel(channelIndex, yStart) {
+  if ((stftPayload.channels || 1) <= 1) {
+    return;
+  }
+  stftCtx.fillStyle = "rgba(241, 243, 238, 0.75)";
+  stftCtx.font = `${Math.max(11, Math.floor(stftCanvas.height * 0.018))}px system-ui`;
+  stftCtx.fillText(channelIndex === 0 ? "L" : "R", 12, yStart + 22);
+}
+
+function drawMagnitudeChannel(columns, channelIndex, yStart, channelHeight, opacity = 1) {
+  const width = stftCanvas.width;
+  const frequencies = stftPayload.frequencies || [];
   const columnWidth = Math.max(1, width / Math.max(1, columns.length));
 
   for (let x = 0; x < columns.length; x += 1) {
@@ -457,28 +613,190 @@ function drawChannel(columns, channelIndex, yStart, channelHeight) {
     const drawW = Math.ceil(columnWidth);
 
     for (let bin = 0; bin < frequencies.length; bin += 1) {
-      const current = clamp(frequencies[bin], lowFrequency, highFrequency);
-      const previous = clamp(frequencies[Math.max(0, bin - 1)] ?? lowFrequency, lowFrequency, highFrequency);
-      const next = clamp(frequencies[Math.min(frequencies.length - 1, bin + 1)] ?? highFrequency, lowFrequency, highFrequency);
-      const low = bin === 0 ? lowFrequency : (previous + current) / 2;
-      const high = bin === frequencies.length - 1 ? highFrequency : (current + next) / 2;
-      const y = yStart + channelHeight - Math.ceil(((high - lowFrequency) / frequencySpan) * channelHeight);
-      const nextY = yStart + channelHeight - Math.ceil(((low - lowFrequency) / frequencySpan) * channelHeight);
       const color = colorForDb(magnitudes[bin] ?? dbScaleStart);
       if (color === null) {
         continue;
       }
       const [r, g, b] = color;
-      stftCtx.fillStyle = `rgb(${r},${g},${b})`;
-      stftCtx.fillRect(drawX, y, drawW, Math.max(1, nextY - y));
+      const rect = binRect(bin, yStart, channelHeight);
+      stftCtx.fillStyle = `rgba(${r},${g},${b},${opacity})`;
+      stftCtx.fillRect(drawX, rect.y, drawW, rect.height);
     }
   }
 
-  if ((stftPayload.channels || 1) > 1) {
-    stftCtx.fillStyle = "rgba(241, 243, 238, 0.75)";
-    stftCtx.font = `${Math.max(11, Math.floor(stftCanvas.height * 0.018))}px system-ui`;
-    stftCtx.fillText(channelIndex === 0 ? "L" : "R", 12, yStart + 22);
+  drawChannelLabel(channelIndex, yStart);
+}
+
+function drawPhaseChannel(phaseColumns, magnitudeColumns, channelIndex, yStart, channelHeight, useAmplitude) {
+  const width = stftCanvas.width;
+  const frequencies = stftPayload.frequencies || [];
+  const columnWidth = Math.max(1, width / Math.max(1, phaseColumns.length));
+
+  for (let x = 0; x < phaseColumns.length; x += 1) {
+    const phases = phaseColumns[x][channelIndex] || [];
+    const magnitudes = magnitudeColumns[x]?.[channelIndex] || [];
+    const drawX = Math.floor(x * columnWidth);
+    const drawW = Math.ceil(columnWidth);
+
+    for (let bin = 0; bin < frequencies.length; bin += 1) {
+      const value = useAmplitude ? 0.18 + valueForDb(magnitudes[bin] ?? dbScaleStart) * 0.82 : 0.92;
+      if (useAmplitude && value <= 0.18) {
+        continue;
+      }
+      const [r, g, b] = colorForPhase(phases[bin] ?? 0, value);
+      const rect = binRect(bin, yStart, channelHeight);
+      stftCtx.fillStyle = `rgb(${r},${g},${b})`;
+      stftCtx.fillRect(drawX, rect.y, drawW, rect.height);
+    }
   }
+
+  drawChannelLabel(channelIndex, yStart);
+}
+
+function ridgePointsForChannel(columns, channelIndex, yStart, channelHeight) {
+  const width = stftCanvas.width;
+  const frequencies = stftPayload.frequencies || [];
+  const columnWidth = Math.max(1, width / Math.max(1, columns.length));
+  const points = [];
+
+  for (let x = 0; x < columns.length; x += 1) {
+    const magnitudes = columns[x][channelIndex] || [];
+    let bestBin = 0;
+    let bestDb = -Infinity;
+    for (let bin = 0; bin < frequencies.length; bin += 1) {
+      const db = magnitudes[bin] ?? -Infinity;
+      if (db > bestDb) {
+        bestDb = db;
+        bestBin = bin;
+      }
+    }
+    points.push({
+      x: x * columnWidth + columnWidth / 2,
+      y: yForFrequency(frequencies[bestBin] || 0, yStart, channelHeight),
+      frequency: frequencies[bestBin] || 0,
+      db: bestDb,
+    });
+  }
+
+  return points;
+}
+
+function drawPolyline(points, color, width) {
+  if (points.length < 2) {
+    return;
+  }
+  stftCtx.strokeStyle = color;
+  stftCtx.lineWidth = width;
+  stftCtx.beginPath();
+  stftCtx.moveTo(points[0].x, points[0].y);
+  for (const point of points.slice(1)) {
+    stftCtx.lineTo(point.x, point.y);
+  }
+  stftCtx.stroke();
+}
+
+function derivativeSeriesForRidge(ridge, times, order) {
+  let samples = ridge.map((point, index) => ({
+    x: point.x,
+    time: Number(times[index] ?? index),
+    value: point.frequency,
+  }));
+
+  for (let derivative = 0; derivative < order; derivative += 1) {
+    const nextSamples = [];
+    for (let index = 1; index < samples.length; index += 1) {
+      const previous = samples[index - 1];
+      const current = samples[index];
+      const dt = current.time - previous.time;
+      if (!Number.isFinite(dt) || dt <= 0) {
+        continue;
+      }
+      nextSamples.push({
+        x: (previous.x + current.x) / 2,
+        time: (previous.time + current.time) / 2,
+        value: (current.value - previous.value) / dt,
+      });
+    }
+    samples = nextSamples;
+    if (samples.length < 2) {
+      break;
+    }
+  }
+
+  return samples.filter((sample) => Number.isFinite(sample.value));
+}
+
+function formatDerivativeValue(value) {
+  const absValue = Math.abs(value);
+  if (absValue > 0 && (absValue < 0.01 || absValue >= 10000)) {
+    return value.toExponential(2);
+  }
+  if (absValue >= 1000) {
+    return value.toFixed(0);
+  }
+  if (absValue >= 10) {
+    return value.toFixed(1);
+  }
+  return value.toFixed(2);
+}
+
+function derivativeUnits(order) {
+  return order === 1 ? "Hz/s" : `Hz/s^${order}`;
+}
+
+function derivativeLabel(order) {
+  return order === 1 ? "df/dt" : `d^${order}f/dt^${order}`;
+}
+
+function drawDerivativeGraph(samples, order, yStart, channelHeight) {
+  if (samples.length < 2) {
+    return;
+  }
+
+  const values = samples.map((sample) => sample.value);
+  const maxAbs = Math.max(...values.map((value) => Math.abs(value)));
+  if (!Number.isFinite(maxAbs) || maxAbs <= 0) {
+    return;
+  }
+
+  const centerY = yStart + channelHeight * 0.5;
+  const graphHalfHeight = channelHeight * 0.36;
+  const scale = graphHalfHeight / maxAbs;
+  const graphPoints = samples.map((sample) => ({
+    x: sample.x,
+    y: centerY - sample.value * scale,
+  }));
+
+  stftCtx.strokeStyle = "rgba(241, 243, 238, 0.34)";
+  stftCtx.lineWidth = Math.max(1, window.devicePixelRatio || 1);
+  stftCtx.beginPath();
+  stftCtx.moveTo(0, centerY);
+  stftCtx.lineTo(stftCanvas.width, centerY);
+  stftCtx.stroke();
+
+  drawPolyline(graphPoints, "rgba(75, 201, 196, 0.96)", Math.max(1.5, (window.devicePixelRatio || 1) * 1.5));
+
+  const maxValue = Math.max(...values);
+  const minValue = Math.min(...values);
+  stftCtx.fillStyle = "rgba(241, 243, 238, 0.82)";
+  stftCtx.font = `${Math.max(11, Math.floor(stftCanvas.height * 0.015))}px system-ui`;
+  stftCtx.textBaseline = "top";
+  stftCtx.fillText(derivativeLabel(order), 12, yStart + 10);
+  stftCtx.fillText(`+${formatDerivativeValue(maxValue)} ${derivativeUnits(order)}`, 12, yStart + 28);
+  stftCtx.textBaseline = "bottom";
+  stftCtx.fillText(`${formatDerivativeValue(minValue)} ${derivativeUnits(order)}`, 12, yStart + channelHeight - 10);
+}
+
+function drawCollapseVelocityChannel(columns, channelIndex, yStart, channelHeight) {
+  const ridge = ridgePointsForChannel(columns, channelIndex, yStart, channelHeight);
+  const lineWidth = Math.max(1.5, (window.devicePixelRatio || 1) * 1.5);
+  const derivativeOrder = Math.round(clamp(numericInput(velocityCountInputEl, 1), 1, 24));
+  velocityCountInputEl.value = String(derivativeOrder);
+
+  drawMagnitudeChannel(columns, channelIndex, yStart, channelHeight, 0.28);
+  drawDerivativeGraph(derivativeSeriesForRidge(ridge, stftPayload.times || [], derivativeOrder), derivativeOrder, yStart, channelHeight);
+  drawPolyline(ridge, "rgba(244, 91, 68, 0.96)", lineWidth);
+  drawChannelLabel(channelIndex, yStart);
 }
 
 function drawStft() {
@@ -490,6 +808,7 @@ function drawStft() {
   stftCtx.fillRect(0, 0, width, height);
 
   const columns = stftPayload?.magnitudesDb || [];
+  const phases = stftPayload?.phases || [];
   if (columns.length === 0 || (stftPayload?.frequencies || []).length === 0) {
     stftCtx.fillStyle = "#bac3be";
     stftCtx.font = `${Math.max(14, Math.floor(height * 0.035))}px system-ui`;
@@ -500,7 +819,16 @@ function drawStft() {
   const channels = stftPayload.channels || 1;
   const channelHeight = Math.floor(height / channels);
   for (let channel = 0; channel < channels; channel += 1) {
-    drawChannel(columns, channel, channel * channelHeight, channelHeight);
+    const yStart = channel * channelHeight;
+    if (activeView === "phase") {
+      drawPhaseChannel(phases, columns, channel, yStart, channelHeight, false);
+    } else if (activeView === "phaseAmplitude") {
+      drawPhaseChannel(phases, columns, channel, yStart, channelHeight, true);
+    } else if (activeView === "collapseVelocity") {
+      drawCollapseVelocityChannel(columns, channel, yStart, channelHeight);
+    } else {
+      drawMagnitudeChannel(columns, channel, yStart, channelHeight);
+    }
   }
 
   if (channels > 1) {
@@ -572,20 +900,24 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-async function downloadStftImage() {
-  if (!stftPayload) {
+async function downloadRecordingImage(recordingId) {
+  if (!recordingId) {
     return;
   }
+  if (selectedRecordingId !== recordingId || stftPayload?.recording?.id !== recordingId) {
+    await selectRecording(recordingId);
+  }
   const blob = await canvasToBlob(stftCanvas);
-  downloadBlob(blob, `${selectedRecording.id}_stft.png`);
+  downloadBlob(blob, `${recordingId}_stft.png`);
   setStatus("PNGを保存しました");
 }
 
-function downloadSelectedWav() {
-  if (!selectedRecording) {
+function downloadRecordingWav(recordingId) {
+  const recording = recordings.find((item) => item.id === recordingId);
+  if (!recording) {
     return;
   }
-  downloadBlob(encodeWav(selectedRecording), `${selectedRecording.id}.wav`);
+  downloadBlob(encodeWav(recording), `${recording.id}.wav`);
 }
 
 async function refresh() {
@@ -602,11 +934,12 @@ window.addEventListener("resize", () => {
   resizeCanvas();
   drawStft();
 });
-refreshButtonEl.addEventListener("click", refresh);
-downloadImageButtonEl.addEventListener("click", downloadStftImage);
-downloadWavButtonEl.addEventListener("click", downloadSelectedWav);
 dbStartInputEl.addEventListener("input", updateDbRange);
 dbEndInputEl.addEventListener("input", updateDbRange);
+velocityCountInputEl.addEventListener("input", drawStft);
+for (const tab of viewTabEls) {
+  tab.addEventListener("click", () => setActiveView(tab.dataset.view || "magnitude"));
+}
 stftWindowInputEl.addEventListener("change", loadSelectedStft);
 stftHopInputEl.addEventListener("change", loadSelectedStft);
 stftMinFrequencyInputEl.addEventListener("change", loadSelectedStft);
